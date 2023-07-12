@@ -1,0 +1,10 @@
+[package]
+name = "bezier_curves"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+glad-gl = { path = "../libs/glad-gl" }
+
+[dependencies.glfw]
+version = "*"
