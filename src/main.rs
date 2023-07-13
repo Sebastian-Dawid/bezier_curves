@@ -157,6 +157,12 @@ impl CubicBezier {
 fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
     match event {
         glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => window.set_should_close(true),
+        glfw::WindowEvent::FramebufferSize(_, _) => {
+            let (width, height): (i32, i32) = window.get_framebuffer_size();
+            unsafe {
+                gl::Viewport(0, 0, width, height);
+            }
+        },
         _ => {}
     }
 }
@@ -164,6 +170,8 @@ fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
 fn main() {
     let vertex_src: String = std::fs::read_to_string("shaders/vs.glsl").expect("Unable to read file.");
     let fragment_src: String = std::fs::read_to_string("shaders/fs.glsl").expect("Unable to read file.");
+    let ctrl_vs_src: String = std::fs::read_to_string("shaders/ctrl_vs.glsl").expect("Unable to read file.");
+    let ctrl_fs_src: String = std::fs::read_to_string("shaders/ctrl_fs.glsl").expect("Unable to read file.");
 
     let mut glfw: Glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
 
@@ -174,24 +182,25 @@ fn main() {
                                .expect("Failed to create Window.");
     
     window.set_key_polling(true);
+    window.set_framebuffer_size_polling(true);
     window.make_current();
 
     gl::load(|e| glfw.get_proc_address_raw(e) as *const c_void);
 
     let shader: Shader = Shader::new(&vertex_src, &fragment_src);
-    shader._use();
+    let ctrl_pts_shader: Shader = Shader::new(&ctrl_vs_src, &ctrl_fs_src);
 
-    let mut vao = 0;
-    let mut vbo = 0;
+    let vao: [u32; 2] = [0, 0];
+    let vbo: [u32; 2] = [0, 0];
 
     let a: Vertex = Vertex {
         position: [0.0, 0.0],
     };
     let c_1: Vertex = Vertex {
-        position: [0.0, 1.0],
+        position: [0.33, 0.5],
     };
     let c_2: Vertex = Vertex {
-        position: [1.0, 1.0],
+        position: [0.66, -0.5],
     };
     let b: Vertex = Vertex {
         position: [1.0, 0.0],
@@ -206,16 +215,29 @@ fn main() {
             v = acc;
             return v
         });
-    
-    unsafe {
-        gl::GenVertexArrays(1, &mut vao);
-        gl::GenBuffers(1, &mut vbo);
 
-        gl::BindVertexArray(vao);
-        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+    let vertices: Vec<f32> = vec![a, c_1, c_2, b].iter().map(|e| e.position).flatten().collect();
+
+    shader._use();
+    unsafe {
+        gl::GenVertexArrays(2, vao.as_ptr() as *mut u32);
+        gl::GenBuffers(2, vbo.as_ptr() as *mut u32);
+
+        gl::BindVertexArray(vao[0]);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo[0]);
         gl::BufferData(gl::ARRAY_BUFFER, (curve.len() * size_of::<f32>()) as isize, curve.as_ptr() as *const c_void, gl::STATIC_DRAW);
         gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (2 * size_of::<f32>()) as i32, 0 as *const c_void);
         gl::EnableVertexAttribArray(0);
+    }
+
+    ctrl_pts_shader._use();
+    unsafe {
+        gl::BindVertexArray(vao[1]);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo[1]);
+        gl::BufferData(gl::ARRAY_BUFFER, (vertices.len() * size_of::<f32>()) as isize, vertices.as_ptr() as *const c_void, gl::STATIC_DRAW);
+        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (2 * size_of::<f32>()) as i32, 0 as *const c_void);
+        gl::EnableVertexAttribArray(0);
+        gl::PointSize(5.0);
     }
 
     while !window.should_close() {
@@ -227,11 +249,18 @@ fn main() {
         unsafe {
             gl::ClearColor(1.0, 1.0, 1.0, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
-
-            shader._use();
-
-            gl::BindVertexArray(vao);
+        }
+        
+        shader._use();
+        unsafe {
+            gl::BindVertexArray(vao[0]);
             gl::DrawArrays(gl::LINE_STRIP, 0, (curve.len() / 2) as i32);
+        }
+
+        ctrl_pts_shader._use();
+        unsafe {
+            gl::BindVertexArray(vao[1]);
+            gl::DrawArrays(gl::POINTS, 0, 4);
         }
 
         window.swap_buffers();
