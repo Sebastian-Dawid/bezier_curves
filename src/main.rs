@@ -1,5 +1,6 @@
 extern crate glad_gl;
 extern crate glfw;
+extern crate nalgebra_glm as glm;
 
 use std::sync::mpsc::Receiver;
 use std::{ops, usize};
@@ -154,7 +155,7 @@ impl CubicBezier {
     }
 }
 
-fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
+fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent, resized: &mut bool) {
     match event {
         glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => window.set_should_close(true),
         glfw::WindowEvent::FramebufferSize(_, _) => {
@@ -162,6 +163,7 @@ fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
             unsafe {
                 gl::Viewport(0, 0, width, height);
             }
+            *resized = true;
         },
         _ => {}
     }
@@ -197,15 +199,17 @@ fn main() {
         position: [0.0, 0.0],
     };
     let c_1: Vertex = Vertex {
-        position: [0.33, 0.5],
+        position: [2.0, 1.0],
     };
     let c_2: Vertex = Vertex {
-        position: [0.66, -0.5],
+        position: [-1.0, 1.0],
     };
     let b: Vertex = Vertex {
         position: [1.0, 0.0],
     };
-    let bezier: CubicBezier = CubicBezier { a: a, c_1: c_1, c_2: c_2, b: b };
+    let bezier: CubicBezier = CubicBezier { a, c_1,  c_2, b };
+    let lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+    let upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
     let curve: Vec<f32> = bezier.compute(100)
         .iter()
         .map(|e| e.position)
@@ -228,6 +232,7 @@ fn main() {
         gl::BufferData(gl::ARRAY_BUFFER, (curve.len() * size_of::<f32>()) as isize, curve.as_ptr() as *const c_void, gl::STATIC_DRAW);
         gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (2 * size_of::<f32>()) as i32, 0 as *const c_void);
         gl::EnableVertexAttribArray(0);
+        gl::LineWidth(3.0);
     }
 
     ctrl_pts_shader._use();
@@ -240,10 +245,31 @@ fn main() {
         gl::PointSize(5.0);
     }
 
+    let mut resized: bool = true;
+
     while !window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
-            handle_window_event(&mut window, event);
+            handle_window_event(&mut window, event, &mut resized);
+        }
+
+        if resized {
+            let (width, height): (i32, i32) = window.get_framebuffer_size();
+            let window_ratio: f32 = height as f32 / width as f32;
+            let projection: glm::Mat4 = glm::ortho(lower, upper, window_ratio * lower, window_ratio * upper, 0.0, 1.0);
+            println!("{}", projection);
+            let projection_c_str: CString = CString::new("projection").unwrap();
+            shader._use();
+            unsafe {
+                let loc: i32 = gl::GetUniformLocation(shader.id, projection_c_str.as_ptr());
+                gl::UniformMatrix4fv(loc, 1, gl::FALSE, projection.as_ptr());
+            }
+            ctrl_pts_shader._use();
+            unsafe {
+                let loc = gl::GetUniformLocation(ctrl_pts_shader.id, projection_c_str.as_ptr());
+                gl::UniformMatrix4fv(loc, 1, gl::FALSE, projection.as_ptr());
+            }
+            resized = false;
         }
 
         unsafe {
