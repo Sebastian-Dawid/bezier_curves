@@ -124,6 +124,8 @@ impl ops::Mul<Vertex> for f32 {
     }
 }
 
+#[allow(dead_code)]
+// used for DeCateljau's algorithm
 fn lerp(a: Vertex, b: Vertex, t: f32) -> Vertex {
     (1 as f32 - t) * a + t * b
 }
@@ -142,20 +144,28 @@ impl CubicBezier {
         for i in 0..=samples {
             let t: f32 = (1 as f32/samples as f32) * i as f32;
 
-            let s_1: Vertex = lerp(self.a.clone(), self.c_1.clone(), t);
+            // DeCasteljau's algorithm
+            /* let s_1: Vertex = lerp(self.a.clone(), self.c_1.clone(), t);
             let s_2: Vertex = lerp(self.c_1.clone(), self.c_2.clone(), t);
             let s_3: Vertex = lerp(self.c_2.clone(), self.b.clone(), t);
 
             let t_1: Vertex = lerp(s_1, s_2.clone(), t);
             let t_2: Vertex = lerp(s_2, s_3, t);
+            let p: Vertex = lerp(t_1, t_2, t);*/
 
-            res.push(lerp(t_1, t_2, t));
+            // Bernstein
+            let p: Vertex = self.a * ( -t.powi(3) + 3.0*t.powi(2) - 3.0*t + 1.0 )
+                + self.c_1 * ( 3.0*t.powi(3) - 6.0*t.powi(2) + 3.0*t )
+                + self.c_2 * ( -3.0*t.powi(3) + 3.0*t.powi(2) )
+                + self.b * ( t.powi(3) );
+
+            res.push(p);
         }
         res
     }
 }
 
-fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent, resized: &mut bool) {
+fn handle_window_event(window: &mut glfw::Window, event: &glfw::WindowEvent, resized: &mut bool) {
     match event {
         glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => window.set_should_close(true),
         glfw::WindowEvent::FramebufferSize(_, _) => {
@@ -185,6 +195,8 @@ fn main() {
     
     window.set_key_polling(true);
     window.set_framebuffer_size_polling(true);
+    window.set_mouse_button_polling(true);
+    window.set_scroll_polling(true);
     window.make_current();
 
     gl::load(|e| glfw.get_proc_address_raw(e) as *const c_void);
@@ -247,10 +259,40 @@ fn main() {
 
     let mut resized: bool = true;
 
+    // create second framebuffer
+    let picking_framebuffer: u32 = 0;
+    let picking_texture: u32 = 0;
+    let depth_buffer: u32 = 0;
+    unsafe {
+        gl::GenFramebuffers(1, (&picking_framebuffer as *const u32) as *mut u32); // why is this shit allowd? ref -/> *mut but ref -> *const -> *mut !?
+        gl::BindFramebuffer(gl::FRAMEBUFFER, picking_framebuffer);
+
+        gl::GenTextures(1, (&picking_texture as *const u32) as *mut u32);
+        gl::BindTexture(gl::TEXTURE_2D, picking_texture);
+        gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RGBA as i32, 300, 300, 0, gl::RGBA, gl::UNSIGNED_BYTE, std::ptr::null()); // oh boy... why is the internal format
+                                                                                                                        // an GLint if the format is an GLenum?
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
+        gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, picking_texture, 0);
+        gl::GenRenderbuffers(1, (&depth_buffer as *const u32) as *mut u32);
+        gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
+        gl::RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 300, 300);
+
+        gl::FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::RENDERBUFFER, depth_buffer);
+        
+        if gl::CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
+            println!("ERROR::FRAMEBUFFER_INCOMPLETE");
+        }
+        gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+    }
+
     while !window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
-            handle_window_event(&mut window, event, &mut resized);
+            handle_window_event(&mut window, &event, &mut resized);
+            println!("{:?}", event);
         }
 
         if resized {
