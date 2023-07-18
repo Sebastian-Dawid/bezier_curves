@@ -93,6 +93,36 @@ impl Shader {
             gl::UseProgram(self.id);
         }
     }
+    
+    /// Sets the attribute at the given index by binding the given vertex array object and vertex buffer
+    /// object, buffering the data and setting the vertex attribute pointer according to the passed
+    /// parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * T - Type parameter that provides the rust-type of the data to be buffered.
+    ///
+    /// * index         - the location of the attribute to set, is either known at compile time or can be aquired at run time using `gl::GetAttribLocation`
+    /// * vao           - the vertex array object to bind
+    /// * target_buffer - the target to buffer the data to (e.g. `gl::ARRAY_BUFFER`)
+    /// * vbo           - the vertex buffer object to bind
+    /// * data          - the data to buffer
+    /// * usage         - the usage of the buffer (e.g. `gl::STATIC_DRAW`)
+    /// * type_         - the gl type of the data (e.g. `gl::FLOAT`)
+    /// * normalize     - wheter the data should be normalized as the corredsponding gl type (e.g. `gl::FALSE`)
+    /// * size          - the size of an element contained in the data (e.g. `2` for 2D positions)
+    /// * stride        - distance between elements in the data (this is not the size if your buffer contains more than one attribute)
+    /// * start         - a pointer to the starting position of your data (this is not a memory address but the offset into the data in bytes if the first element is 0)
+    fn set_attrib<T>(&self, index: u32, vao: u32, target_buffer: u32, vbo: u32, data: &Vec<T>,
+                     usage: u32, type_: u32, normalize: u8, size: i32, stride: i32, start: *const c_void) {
+        unsafe {
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BufferData(target_buffer, (data.len() * size_of::<T>()) as isize, data.as_ptr() as *const c_void, usage);
+            gl::VertexAttribPointer(index, size, type_, normalize, stride * size_of::<T>() as i32, start);
+            gl::EnableVertexAttribArray(index);
+        }
+    }
 }
 
 /// A 2-Dimensional Vertex with elements of type `f32`.
@@ -187,7 +217,7 @@ impl CubicBezier {
     }
 }
 
-fn handle_window_event(window: &mut glfw::Window, event: &glfw::WindowEvent, resized: &mut bool, clicked: &mut bool) {
+fn handle_window_event(window: &mut glfw::Window, event: &glfw::WindowEvent, resized: &mut bool, clicked: &mut bool, moving: &mut bool) {
     match event {
         glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => window.set_should_close(true),
         glfw::WindowEvent::FramebufferSize(_, _) => {
@@ -197,7 +227,11 @@ fn handle_window_event(window: &mut glfw::Window, event: &glfw::WindowEvent, res
             }
             *resized = true;
         },
-        glfw::WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => *clicked = true,
+        glfw::WindowEvent::MouseButton(MouseButton::Button1, Action::Press, _) => {
+            *clicked = true;
+            *moving = true;
+        },
+        glfw::WindowEvent::MouseButton(MouseButton::Button1, Action::Release, _) => *moving = false,
         _ => {}
     }
 }
@@ -245,10 +279,10 @@ fn main() {
     let b: Vertex = Vertex {
         position: [1.0, 0.0],
     };
-    let bezier: CubicBezier = CubicBezier { a, c_1,  c_2, b };
-    let lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
-    let upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
-    let curve: Vec<f32> = bezier.compute(100)
+    let mut bezier: CubicBezier = CubicBezier { a, c_1,  c_2, b };
+    let mut lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+    let mut upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+    let mut curve: Vec<f32> = bezier.compute(100)
         .iter()
         .map(|e| e.position)
         .fold(vec![], |mut acc: Vec<f32>, e: [f32; 2]| {
@@ -258,8 +292,8 @@ fn main() {
             return v
         });
 
-    let mut idx: u32 = 0;
-    let vertices: Vec<f32> = vec![a, c_1, c_2, b].iter()
+    let mut idx: i32 = -1;
+    let mut vertices: Vec<f32> = vec![a, c_1, c_2, b].iter()
         .map(|e| {
             idx += 1;
             return [e.position[0], e.position[1],
@@ -272,28 +306,18 @@ fn main() {
 
     println!("{:#?}", vertices);
 
-    shader._use();
     unsafe {
         gl::GenVertexArrays(3, vao.as_ptr() as *mut u32);
         gl::GenBuffers(2, vbo.as_ptr() as *mut u32);
-
-        gl::BindVertexArray(vao[0]);
-        gl::BindBuffer(gl::ARRAY_BUFFER, vbo[0]);
-        gl::BufferData(gl::ARRAY_BUFFER, (curve.len() * size_of::<f32>()) as isize, curve.as_ptr() as *const c_void, gl::STATIC_DRAW);
-        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (2 * size_of::<f32>()) as i32, 0 as *const c_void);
-        gl::EnableVertexAttribArray(0);
-        gl::LineWidth(3.0);
-    }
-
-    ctrl_pts_shader._use();
-    unsafe {
-        gl::BindVertexArray(vao[1]);
-        gl::BindBuffer(gl::ARRAY_BUFFER, vbo[1]);
-        gl::BufferData(gl::ARRAY_BUFFER, (vertices.len() * size_of::<f32>()) as isize, vertices.as_ptr() as *const c_void, gl::STATIC_DRAW);
-        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (6 * size_of::<f32>()) as i32, 0 as *const c_void);
-        gl::EnableVertexAttribArray(0);
+        gl::LineWidth(5.0);
         gl::PointSize(25.0);
     }
+
+    shader._use();
+    shader.set_attrib::<f32>(0, vao[0], gl::ARRAY_BUFFER, vbo[0], &curve, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
+
+    ctrl_pts_shader._use();
+    ctrl_pts_shader.set_attrib::<f32>(0, vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
 
     picking_shader._use();
     unsafe {
@@ -331,20 +355,29 @@ fn main() {
     }
 
     let mut resized: bool = true;
+    let mut moving: bool = false;
     let mut clicked: bool = false;
+    
+    let mut projection: glm::Mat4;
+    let mut inv_projection: glm::Mat4 = glm::identity();
+
+    let mut width: i32 = 0;
+    let mut height: i32 = 0;
+   
+    let mut id: u32 = 0xFFFFFFFF;
 
     while !window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
-            handle_window_event(&mut window, &event, &mut resized, &mut clicked);
-            println!("{:?}", event);
+            handle_window_event(&mut window, &event, &mut resized, &mut clicked, &mut moving);
         }
 
         if resized {
-            let (width, height): (i32, i32) = window.get_framebuffer_size();
+            (width, height) = window.get_framebuffer_size();
             let window_ratio: f32 = height as f32 / width as f32;
-            let projection: glm::Mat4 = glm::ortho(lower, upper, window_ratio * lower, window_ratio * upper, 0.0, 1.0);
-            println!("{}", projection);
+            projection = glm::ortho(lower, upper, window_ratio * lower, window_ratio * upper, 0.0, 1.0);
+            inv_projection = glm::inverse(&projection);
+            println!("{}", inv_projection);
             let projection_c_str: CString = CString::new("projection").unwrap();
             shader._use();
             unsafe {
@@ -365,7 +398,7 @@ fn main() {
         }
 
         if clicked {
-            let (width, height): (i32, i32) = window.get_framebuffer_size();
+            (width, height) = window.get_framebuffer_size();
             unsafe {
                 gl::BindTexture(gl::TEXTURE_2D, picking_texture);
                 gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
@@ -389,8 +422,76 @@ fn main() {
 
                 gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
             }
-            println!("{:#?}", data);
+            id = ((data[0] as u32) << 0) + ((data[1] as u32) << 8) + ((data[2] as u32) << 16) + ((data[3] as u32) << 24);
+            println!("{}", id);
             clicked = false;
+        }
+
+        if moving && width != 0 && height != 0 && id != 0xFFFFFFFF {
+            let (mouse_x, mouse_y): (f64, f64) = window.get_cursor_pos();
+            let mpos: glm::Vec4 = inv_projection * glm::Vec4::new(mouse_x as f32 / (width/2) as f32 - 1.0, (height as f64 - mouse_y) as f32 / (height/2) as f32 - 1.0, 0.0, 1.0);
+            
+            match id { // this will need to be more sophisticated once more than one curve are in play
+                0 => {
+                    bezier.a.position[0] = mpos.x;
+                    bezier.a.position[1] = mpos.y;
+                },
+                1 => {
+                    bezier.c_1.position[0] = mpos.x;
+                    bezier.c_1.position[1] = mpos.y;
+                },
+                2 => {
+                    bezier.c_2.position[0] = mpos.x;
+                    bezier.c_2.position[1] = mpos.y;
+                },
+                3 => {
+                    bezier.b.position[0] = mpos.x;
+                    bezier.b.position[1] = mpos.y;
+                },
+                _ => ()
+            }
+
+            lower = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
+                .map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+            upper = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
+                .map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+            curve = bezier.compute(100)
+                .iter()
+                .map(|e| e.position)
+                .fold(vec![], |mut acc: Vec<f32>, e: [f32; 2]| {
+                    let v;
+                    acc.extend_from_slice(&e);
+                    v = acc;
+                    return v
+                });
+            idx = -1;
+            vertices = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
+                .map(|e| {
+                    idx += 1;
+                    return [e.position[0], e.position[1],
+                    ((idx >>  0) & 0xFF) as f32 / 0xFF as f32,
+                    ((idx >>  8) & 0xFF) as f32 / 0xFF as f32,
+                    ((idx >> 16) & 0xFF) as f32 / 0xFF as f32,
+                    ((idx >> 24) & 0xFF) as f32 / 0xFF as f32];
+                }).flatten().collect();
+
+            shader._use();
+            shader.set_attrib::<f32>(0, vao[0], gl::ARRAY_BUFFER, vbo[0], &curve, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
+
+            ctrl_pts_shader._use();
+            ctrl_pts_shader.set_attrib::<f32>(0, vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
+
+            picking_shader._use();
+            unsafe {
+                gl::BindVertexArray(vao[2]);
+                gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (6 * size_of::<f32>()) as i32, 0 as *const c_void);
+                gl::EnableVertexAttribArray(0);
+                gl::VertexAttribPointer(1, 4, gl::FLOAT, gl::FALSE, (6 * size_of::<f32>()) as i32, (2 * size_of::<f32>()) as *const c_void);
+                gl::EnableVertexAttribArray(1);
+            }
+
+        } else {
+            id = 0xFFFFFFFF;
         }
 
         unsafe {
