@@ -3,7 +3,7 @@ extern crate glfw;
 extern crate nalgebra_glm as glm;
 
 use std::sync::mpsc::Receiver;
-use std::{ops, usize};
+use std::usize;
 use glad_gl::gl;
 use glfw::{Action, Context, Key, Glfw, MouseButton};
 use std::ffi::CString;
@@ -20,17 +20,35 @@ struct Shader {
 impl Shader {
     /// Given a vertex and fragment shaders source this function compiles and links a new shader
     /// program with the two given shaders attached to it.
+    /// 
+    /// Optionally a geometry shader source may be given.
     ///
     /// # Arguments
     ///
     /// * `vertex_src` - The source code of the vertex shader to attach as a string slice.
     /// * `fragment_src` - The source code of the fragment shader to attach as a string slice.
-    fn new(vertex_src: &str, fragment_src: &str) -> Shader {
+    /// * `geometry_src` - The source code of the geometry shader to attach as a string slice.
+    fn new(vertex_src: &str, fragment_src: &str, geometry_src: Option<&str>) -> Shader {
         let prog_id: u32;
         let vs_str: CString = CString::new(vertex_src).unwrap();
         let vs_src: *const c_char = vs_str.as_ptr() as *const c_char;
         let fs_str: CString = CString::new(fragment_src).unwrap();
         let fs_src: *const c_char = fs_str.as_ptr() as *const c_char;
+        let gs_str: CString;
+        let gs_src: *const c_char;
+
+        let mut includes_geometry_shader: bool = false;
+
+        match geometry_src {
+            None => {
+                gs_src = std::ptr::null();
+            },
+            _ => {
+                includes_geometry_shader = true;
+                gs_str = CString::new(geometry_src.unwrap()).unwrap();
+                gs_src = gs_str.as_ptr();
+            }
+        }
 
         unsafe {
             let mut success: i32 = 0;
@@ -50,6 +68,23 @@ impl Shader {
                 println!("{}", error.to_string_lossy());
             }
 
+            let mut gs: u32 = 0xFFFFFFFF;
+            if includes_geometry_shader {
+                gs = gl::CreateShader(gl::GEOMETRY_SHADER);
+                gl::ShaderSource(gs, 1, &gs_src, std::ptr::null());
+                gl::CompileShader(gs);
+
+                gl::GetShaderiv(gs, gl::COMPILE_STATUS, &mut success);
+                if success == 0 {
+                    gl::GetShaderiv(gs, gl::INFO_LOG_LENGTH, &mut len);
+                    let mut buffer: Vec<u8> = Vec::with_capacity(len as usize + 1);
+                    buffer.extend([b' '].iter().cycle().take(len as usize));
+                    let error: CString = CString::from_vec_unchecked(buffer);
+                    gl::GetShaderInfoLog(gs, len, std::ptr::null_mut(), error.as_ptr() as *mut c_char);
+                    println!("{}", error.to_string_lossy());
+                }
+            }
+
             let fs: u32 = gl::CreateShader(gl::FRAGMENT_SHADER);
             gl::ShaderSource(fs, 1, &fs_src, std::ptr::null());
             gl::CompileShader(fs);
@@ -66,6 +101,9 @@ impl Shader {
 
             prog_id = gl::CreateProgram();
             gl::AttachShader(prog_id, vs);
+            if includes_geometry_shader {
+                gl::AttachShader(prog_id, gs);
+            }
             gl::AttachShader(prog_id, fs);
 
             gl::LinkProgram(prog_id);
@@ -113,107 +151,17 @@ impl Shader {
     /// * size          - the size of an element contained in the data (e.g. `2` for 2D positions)
     /// * stride        - distance between elements in the data (this is not the size if your buffer contains more than one attribute)
     /// * start         - a pointer to the starting position of your data (this is not a memory address but the offset into the data in bytes if the first element is 0)
-    fn set_attrib<T>(&self, index: u32, vao: u32, target_buffer: u32, vbo: u32, data: &Vec<T>,
+    fn set_attrib<T>(&self, name: &str, vao: u32, target_buffer: u32, vbo: u32, data: &Vec<T>,
                      usage: u32, type_: u32, normalize: u8, size: i32, stride: i32, start: *const c_void) {
+        let attrib_name: CString = CString::new(name).expect("CString::new Failed!");
         unsafe {
+            let index: u32 = gl::GetAttribLocation(self.id, attrib_name.as_ptr()) as u32;
             gl::BindVertexArray(vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
             gl::BufferData(target_buffer, (data.len() * size_of::<T>()) as isize, data.as_ptr() as *const c_void, usage);
             gl::VertexAttribPointer(index, size, type_, normalize, stride * size_of::<T>() as i32, start);
             gl::EnableVertexAttribArray(index);
         }
-    }
-}
-
-/// A 2-Dimensional Vertex with elements of type `f32`.
-#[derive(Debug, Copy, Clone)]
-struct Vertex {
-    /// A `[f32; 2]` Array containing the x and y components of the vector.
-    position: [f32; 2],
-}
-
-impl ops::Add<Vertex> for Vertex {
-    type Output = Vertex;
-
-    fn add(self, _rhs: Vertex) -> Vertex {
-        Vertex {
-            position: [
-                self.position[0] + _rhs.position[0],
-                self.position[1] + _rhs.position[1],
-            ],
-        }
-    }
-}
-
-impl ops::Mul<f32> for Vertex {
-    type Output = Vertex;
-
-    fn mul(self, _rhs: f32) -> Vertex {
-        Vertex {
-            position: [_rhs * self.position[0], _rhs * self.position[1]],
-        }
-    }
-}
-
-impl ops::Mul<Vertex> for f32 {
-    type Output = Vertex;
-
-    fn mul(self, _rhs: Vertex) -> Vertex {
-        Vertex {
-            position: [_rhs.position[0] * self, _rhs.position[1] * self],
-        }
-    }
-}
-
-#[allow(dead_code)]
-// used for DeCasteljau's algorithm
-fn lerp(a: Vertex, b: Vertex, t: f32) -> Vertex {
-    (1 as f32 - t) * a + t * b
-}
-
-/// A cubic bezier curve with control points of type `Vertex`.
-#[derive(Debug)]
-struct CubicBezier {
-    /// The staring point of the curve.
-    a: Vertex,
-    /// The first control point of the curve.
-    c_1: Vertex,
-    /// The second control point of the curve.
-    c_2: Vertex,
-    /// The endpoint point of the curve.
-    b: Vertex,
-}
-
-impl CubicBezier {
-    /// Computes `samples` points along the curve an returns those as a `Vec<Vertex>`.
-    /// Uses the Bernstein form of the bezier to compute the points.
-    ///
-    /// # Arguments
-    ///
-    /// * `samples` - The number of samples to take along the curve.
-    fn compute(&self, samples: u32) -> Vec<Vertex> {
-        let mut res: Vec<Vertex> = vec![];
-        for i in 0..=samples {
-            let t: f32 = (1 as f32/samples as f32) * i as f32;
-
-            // DeCasteljau's algorithm
-            /* let s_1: Vertex = lerp(self.a.clone(), self.c_1.clone(), t);
-               let s_2: Vertex = lerp(self.c_1.clone(), self.c_2.clone(), t);
-               let s_3: Vertex = lerp(self.c_2.clone(), self.b.clone(), t);
-
-               let t_1: Vertex = lerp(s_1, s_2.clone(), t);
-               let t_2: Vertex = lerp(s_2, s_3, t);
-               let p: Vertex = lerp(t_1, t_2, t);*/
-
-            // Bernstein
-            let p: Vertex = self.a * ( -t.powi(3) + 3.0*t.powi(2) - 3.0*t + 1.0 )
-                + self.c_1 * ( 3.0*t.powi(3) - 6.0*t.powi(2) + 3.0*t )
-                + self.c_2 * ( -3.0*t.powi(3) + 3.0*t.powi(2) )
-                + self.b * ( t.powi(3) );
-
-            res.push(p);
-        }
-        res
     }
 }
 
@@ -238,6 +186,7 @@ fn handle_window_event(window: &mut glfw::Window, event: &glfw::WindowEvent, res
 
 fn main() {
     let vertex_src: String = std::fs::read_to_string("shaders/vs.glsl").expect("Unable to read file.");
+    let geometry_src: String = std::fs::read_to_string("shaders/gs.glsl").expect("Unable to read file.");
     let fragment_src: String = std::fs::read_to_string("shaders/fs.glsl").expect("Unable to read file.");
     let ctrl_vs_src: String = std::fs::read_to_string("shaders/ctrl_vs.glsl").expect("Unable to read file.");
     let ctrl_fs_src: String = std::fs::read_to_string("shaders/ctrl_fs.glsl").expect("Unable to read file.");
@@ -260,43 +209,28 @@ fn main() {
 
     gl::load(|e| glfw.get_proc_address_raw(e) as *const c_void);
 
-    let shader: Shader = Shader::new(&vertex_src, &fragment_src);
-    let ctrl_pts_shader: Shader = Shader::new(&ctrl_vs_src, &ctrl_fs_src);
-    let picking_shader: Shader = Shader::new(&picking_vs_src, &picking_fs_src);
+    let shader: Shader = Shader::new(&vertex_src, &fragment_src, Some(&geometry_src));
+    let ctrl_pts_shader: Shader = Shader::new(&ctrl_vs_src, &ctrl_fs_src, None);
+    let picking_shader: Shader = Shader::new(&picking_vs_src, &picking_fs_src, None);
 
     let vao: [u32; 3] = [0, 0, 0];
     let vbo: [u32; 2] = [0, 0];
 
-    let a: Vertex = Vertex {
-        position: [0.0, 0.0],
-    };
-    let c_1: Vertex = Vertex {
-        position: [2.0, 1.0],
-    };
-    let c_2: Vertex = Vertex {
-        position: [-1.0, 1.0],
-    };
-    let b: Vertex = Vertex {
-        position: [1.0, 0.0],
-    };
-    let mut bezier: CubicBezier = CubicBezier { a, c_1,  c_2, b };
-    let mut lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
-    let mut upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
-    let mut curve: Vec<f32> = bezier.compute(100)
-        .iter()
-        .map(|e| e.position)
-        .fold(vec![], |mut acc: Vec<f32>, e: [f32; 2]| {
-            let v;
-            acc.extend_from_slice(&e);
-            v = acc;
-            return v
-        });
+    let mut a: [f32; 2] = [0.0, 0.0];
+    let mut c_1: [f32; 2] = [2.0, 1.0];
+    let mut c_2: [f32; 2] = [-1.0, 1.0];
+    let mut b: [f32; 2] = [1.0, 0.0];
+
+    let mut lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e[0].min(e[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+    let mut upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e[0].max(e[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+
+    let mut ctrl_pts: Vec<f32> = vec![a, c_1, c_2, b].iter().map(|e| [e[0], e[1]]).flatten().collect();
 
     let mut idx: i32 = -1;
     let mut vertices: Vec<f32> = vec![a, c_1, c_2, b].iter()
         .map(|e| {
             idx += 1;
-            return [e.position[0], e.position[1],
+            return [e[0], e[1],
             ((idx >>  0) & 0xFF) as f32 / 0xFF as f32,
             ((idx >>  8) & 0xFF) as f32 / 0xFF as f32,
             ((idx >> 16) & 0xFF) as f32 / 0xFF as f32,
@@ -314,10 +248,10 @@ fn main() {
     }
 
     shader._use();
-    shader.set_attrib::<f32>(0, vao[0], gl::ARRAY_BUFFER, vbo[0], &curve, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
+    shader.set_attrib::<f32>("pos", vao[0], gl::ARRAY_BUFFER, vbo[0], &ctrl_pts, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
 
     ctrl_pts_shader._use();
-    ctrl_pts_shader.set_attrib::<f32>(0, vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
+    ctrl_pts_shader.set_attrib::<f32>("pos", vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
 
     picking_shader._use();
     unsafe {
@@ -433,42 +367,35 @@ fn main() {
             
             match id { // this will need to be more sophisticated once more than one curve are in play
                 0 => {
-                    bezier.a.position[0] = mpos.x;
-                    bezier.a.position[1] = mpos.y;
+                    a[0] = mpos.x;
+                    a[1] = mpos.y;
                 },
                 1 => {
-                    bezier.c_1.position[0] = mpos.x;
-                    bezier.c_1.position[1] = mpos.y;
+                    c_1[0] = mpos.x;
+                    c_1[1] = mpos.y;
                 },
                 2 => {
-                    bezier.c_2.position[0] = mpos.x;
-                    bezier.c_2.position[1] = mpos.y;
+                    c_2[0] = mpos.x;
+                    c_2[1] = mpos.y;
                 },
                 3 => {
-                    bezier.b.position[0] = mpos.x;
-                    bezier.b.position[1] = mpos.y;
+                    b[0] = mpos.x;
+                    b[1] = mpos.y;
                 },
                 _ => ()
             }
 
-            lower = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
-                .map(|e| e.position[0].min(e.position[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
-            upper = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
-                .map(|e| e.position[0].max(e.position[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
-            curve = bezier.compute(100)
-                .iter()
-                .map(|e| e.position)
-                .fold(vec![], |mut acc: Vec<f32>, e: [f32; 2]| {
-                    let v;
-                    acc.extend_from_slice(&e);
-                    v = acc;
-                    return v
-                });
+            lower = vec![a, c_1, c_2, b].iter()
+                .map(|e| e[0].min(e[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+            upper = vec![a, c_1, c_2, b].iter()
+                .map(|e| e[0].max(e[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+            ctrl_pts = vec![a, c_1, c_2, b].iter()
+                .map(|e| [e[0], e[1]]).flatten().collect();
             idx = -1;
-            vertices = vec![bezier.a, bezier.c_1, bezier.c_2, bezier.b].iter()
+            vertices = vec![a, c_1, c_2, b].iter()
                 .map(|e| {
                     idx += 1;
-                    return [e.position[0], e.position[1],
+                    return [e[0], e[1],
                     ((idx >>  0) & 0xFF) as f32 / 0xFF as f32,
                     ((idx >>  8) & 0xFF) as f32 / 0xFF as f32,
                     ((idx >> 16) & 0xFF) as f32 / 0xFF as f32,
@@ -476,10 +403,10 @@ fn main() {
                 }).flatten().collect();
 
             shader._use();
-            shader.set_attrib::<f32>(0, vao[0], gl::ARRAY_BUFFER, vbo[0], &curve, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
+            shader.set_attrib::<f32>("pos", vao[0], gl::ARRAY_BUFFER, vbo[0], &ctrl_pts, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
 
             ctrl_pts_shader._use();
-            ctrl_pts_shader.set_attrib::<f32>(0, vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
+            ctrl_pts_shader.set_attrib::<f32>("pos", vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
 
             picking_shader._use();
             unsafe {
@@ -502,7 +429,7 @@ fn main() {
         shader._use();
         unsafe {
             gl::BindVertexArray(vao[0]);
-            gl::DrawArrays(gl::LINE_STRIP, 0, (curve.len() / 2) as i32);
+            gl::DrawArrays(gl::LINES_ADJACENCY, 0, 4);
         }
 
         ctrl_pts_shader._use();
