@@ -198,7 +198,7 @@ fn main() {
     glfw.window_hint(glfw::WindowHint::ContextVersion(3, 3));
     glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
 
-    let (mut window, events): (glfw::Window, Receiver<(f64, glfw::WindowEvent)>) = glfw.create_window(300, 300, "Bezier Curves", glfw::WindowMode::Windowed)
+    let (mut window, events): (glfw::Window, Receiver<(f64, glfw::WindowEvent)>) = glfw.create_window(800, 800, "Bezier Curves", glfw::WindowMode::Windowed)
                                .expect("Failed to create Window.");
 
     window.set_key_polling(true);
@@ -215,19 +215,27 @@ fn main() {
 
     let vao: [u32; 3] = [0, 0, 0];
     let vbo: [u32; 2] = [0, 0];
+    let ebo: [u32; 1] = [0];
 
-    let mut a: [f32; 2] = [0.0, 0.0];
-    let mut c_1: [f32; 2] = [2.0, 1.0];
-    let mut c_2: [f32; 2] = [-1.0, 1.0];
-    let mut b: [f32; 2] = [1.0, 0.0];
+    let a: [f32; 2] = [0.0, 0.0];
+    let c_1: [f32; 2] = [2.0, 1.0];
+    let c_2: [f32; 2] = [-1.0, 1.0];
+    let b: [f32; 2] = [1.0, 0.0];
 
-    let mut lower: f32 = vec![a, c_1, c_2, b].iter().map(|e| e[0].min(e[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
-    let mut upper: f32 = vec![a, c_1, c_2, b].iter().map(|e| e[0].max(e[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+    let c_3: [f32; 2] = [0.8, 4.0];
+    let c_4: [f32; 2] = [0.6, 2.0];
+    let c: [f32; 2] = [0.5, 3.0];
 
-    let mut ctrl_pts: Vec<f32> = vec![a, c_1, c_2, b].iter().map(|e| [e[0], e[1]]).flatten().collect();
+    let mut spline: Vec<[f32; 2]> = vec![a, c_1, c_2, b, c_3, c_4, c];
+    let indices: [u32; 8] = [0, 1, 2, 3, 3, 4, 5, 6];
+
+    let mut lower: f32 = spline.iter().map(|e| e[0].min(e[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
+    let mut upper: f32 = spline.iter().map(|e| e[0].max(e[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
+
+    let mut ctrl_pts: Vec<f32> = spline.iter().map(|e| [e[0], e[1]]).flatten().collect();
 
     let mut idx: i32 = -1;
-    let mut vertices: Vec<f32> = vec![a, c_1, c_2, b].iter()
+    let mut vertices: Vec<f32> = spline.iter()
         .map(|e| {
             idx += 1;
             return [e[0], e[1],
@@ -243,12 +251,17 @@ fn main() {
     unsafe {
         gl::GenVertexArrays(3, vao.as_ptr() as *mut u32);
         gl::GenBuffers(2, vbo.as_ptr() as *mut u32);
+        gl::GenBuffers(1, ebo.as_ptr() as *mut u32);
         gl::LineWidth(5.0);
         gl::PointSize(25.0);
     }
 
     shader._use();
     shader.set_attrib::<f32>("pos", vao[0], gl::ARRAY_BUFFER, vbo[0], &ctrl_pts, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 2, 0 as *const c_void);
+    unsafe {
+        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo[0]);
+        gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (indices.len() * size_of::<u32>()) as isize, indices.as_ptr() as *const c_void, gl::STATIC_DRAW);
+    }
 
     ctrl_pts_shader._use();
     ctrl_pts_shader.set_attrib::<f32>("pos", vao[1], gl::ARRAY_BUFFER, vbo[1], &vertices, gl::STATIC_DRAW, gl::FLOAT, gl::FALSE, 2, 6, 0 as *const c_void);
@@ -350,7 +363,7 @@ fn main() {
             picking_shader._use();
             unsafe {
                 gl::BindVertexArray(vao[2]);
-                gl::DrawArrays(gl::POINTS, 0, 4);
+                gl::DrawArrays(gl::POINTS, 0, (vertices.len() / 6) as i32);
 
                 gl::ReadPixels(mouse_x as i32, height - mouse_y as i32, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, data.as_ptr() as *mut c_void);
 
@@ -364,35 +377,19 @@ fn main() {
         if moving && width != 0 && height != 0 && id != 0xFFFFFFFF {
             let (mouse_x, mouse_y): (f64, f64) = window.get_cursor_pos();
             let mpos: glm::Vec4 = inv_projection * glm::Vec4::new(mouse_x as f32 / (width/2) as f32 - 1.0, (height as f64 - mouse_y) as f32 / (height/2) as f32 - 1.0, 0.0, 1.0);
-            
-            match id { // this will need to be more sophisticated once more than one curve are in play
-                0 => {
-                    a[0] = mpos.x;
-                    a[1] = mpos.y;
-                },
-                1 => {
-                    c_1[0] = mpos.x;
-                    c_1[1] = mpos.y;
-                },
-                2 => {
-                    c_2[0] = mpos.x;
-                    c_2[1] = mpos.y;
-                },
-                3 => {
-                    b[0] = mpos.x;
-                    b[1] = mpos.y;
-                },
-                _ => ()
-            }
 
-            lower = vec![a, c_1, c_2, b].iter()
+            spline[id as usize][0] = mpos.x;
+            spline[id as usize][1] = mpos.y;
+
+
+            lower = spline.iter()
                 .map(|e| e[0].min(e[1])).reduce(|acc: f32, e: f32| acc.min(e)).unwrap() - 0.1;
-            upper = vec![a, c_1, c_2, b].iter()
+            upper = spline.iter()
                 .map(|e| e[0].max(e[1])).reduce(|acc: f32, e: f32| acc.max(e)).unwrap() + 0.1;
-            ctrl_pts = vec![a, c_1, c_2, b].iter()
+            ctrl_pts = spline.iter()
                 .map(|e| [e[0], e[1]]).flatten().collect();
             idx = -1;
-            vertices = vec![a, c_1, c_2, b].iter()
+            vertices = spline.iter()
                 .map(|e| {
                     idx += 1;
                     return [e[0], e[1],
@@ -429,13 +426,14 @@ fn main() {
         shader._use();
         unsafe {
             gl::BindVertexArray(vao[0]);
-            gl::DrawArrays(gl::LINES_ADJACENCY, 0, 4);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo[0]);
+            gl::DrawElements(gl::LINES_ADJACENCY, indices.len() as i32, gl::UNSIGNED_INT, 0 as *const c_void);
         }
 
         ctrl_pts_shader._use();
         unsafe {
             gl::BindVertexArray(vao[1]);
-            gl::DrawArrays(gl::POINTS, 0, 4);
+            gl::DrawArrays(gl::POINTS, 0, (vertices.len() / 6) as i32);
         }
 
         window.swap_buffers();
