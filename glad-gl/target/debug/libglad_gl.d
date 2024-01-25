@@ -1,0 +1,1 @@
+/home/sdawid/Rust-Programms/bezier_curves/glad-gl/target/debug/libglad_gl.rlib: /home/sdawid/Rust-Programms/bezier_curves/glad-gl/src/gl.rs /home/sdawid/Rust-Programms/bezier_curves/glad-gl/src/lib.rs

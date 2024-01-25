@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-glad-gl = { path = "../libs/glad-gl" }
+glad-gl = { path = "glad-gl" }
 nalgebra-glm = "0.18.0"
 
 [dependencies.glfw]
-version = "*"
+version = "0.52"
